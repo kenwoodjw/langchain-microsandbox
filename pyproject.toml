@@ -5,12 +5,15 @@ build-backend = "hatchling.build"
 [project]
 name = "langchain-microsandbox"
 description = "Microsandbox integration for Deep Agents"
-license = { text = "MIT" }
+license = "MIT"
+license-files = ["LICENSE"]
 readme = "README.md"
+keywords = ["deepagents", "langchain", "microsandbox", "sandbox", "microvm"]
+maintainers = [{ name = "kenwoodjw" }]
 
 classifiers = [
+    "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
@@ -30,9 +33,11 @@ dependencies = [
 packages = ["langchain_microsandbox"]
 
 [project.urls]
-Homepage = "https://github.com/langchain-ai/deepagents/tree/main/libs/partners/microsandbox"
-Repository = "https://github.com/langchain-ai/deepagents"
-Documentation = "https://github.com/langchain-ai/deepagents/tree/main/libs/partners/microsandbox"
+Homepage = "https://github.com/kenwoodjw/langchain-microsandbox"
+Repository = "https://github.com/kenwoodjw/langchain-microsandbox"
+Documentation = "https://github.com/kenwoodjw/langchain-microsandbox#readme"
+Issues = "https://github.com/kenwoodjw/langchain-microsandbox/issues"
+Changelog = "https://github.com/kenwoodjw/langchain-microsandbox/blob/main/CHANGELOG.md"
 
 [dependency-groups]
 test = [
@@ -46,12 +51,8 @@ test = [
     "langchain-tests>=1.1.9",
 ]
 
-[tool.uv.sources]
-deepagents = { path = "../../deepagents", editable = true }
-
 [tool.ty.environment]
 python-version = "3.11"
-extra-paths = ["../../deepagents"]
 
 [tool.ty.rules]
 division-by-zero = "error"

@@ -499,7 +499,7 @@ wheels = [
 [[package]]
 name = "deepagents"
 version = "0.7.8"
-source = { editable = "../../deepagents" }
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "langchain" },
     { name = "langchain-anthropic" },
@@ -509,42 +509,9 @@ dependencies = [
     { name = "packaging" },
     { name = "wcmatch" },
 ]
-
-[package.metadata]
-requires-dist = [
-    { name = "av", marker = "extra == 'video'", specifier = ">=18.0.0,<19.0.0" },
-    { name = "langchain", specifier = ">=1.3.16,<2.0.0" },
-    { name = "langchain-anthropic", specifier = ">=1.6.1,<2.0.0" },
-    { name = "langchain-aws", marker = "extra == 'aws'", specifier = ">=1.7.2,<2.0.0" },
-    { name = "langchain-core", specifier = ">=1.6.0,<2.0.0" },
-    { name = "langchain-google-genai", specifier = ">=4.3.4,<5.0.0" },
-    { name = "langchain-quickjs", marker = "extra == 'quickjs'", specifier = ">=0.3.5" },
-    { name = "langsmith", specifier = ">=0.11.1" },
-    { name = "packaging", specifier = ">=23.2" },
-    { name = "pillow", marker = "extra == 'video'", specifier = ">=12.3.0,<13.0.0" },
-    { name = "wcmatch", specifier = ">=11.0" },
-]
-provides-extras = ["aws", "quickjs", "video"]
-
-[package.metadata.requires-dev]
-test = [
-    { name = "av", specifier = ">=18.0.0,<19.0.0" },
-    { name = "build" },
-    { name = "langchain-openai" },
-    { name = "langchain-tests", specifier = ">=1.1.9" },
-    { name = "pillow", specifier = ">=12.3.0,<13.0.0" },
-    { name = "pytest" },
-    { name = "pytest-asyncio", specifier = ">=1.4.0" },
-    { name = "pytest-benchmark" },
-    { name = "pytest-codspeed", specifier = ">=5.0.3,<6.0.0" },
-    { name = "pytest-cov" },
-    { name = "pytest-socket" },
-    { name = "pytest-timeout", specifier = ">=2.4.0,<3.0.0" },
-    { name = "pytest-watcher", specifier = ">=0.6.3,<1.0.0" },
-    { name = "pytest-xdist" },
-    { name = "ruff", specifier = ">=0.15.22,<0.16.0" },
-    { name = "twine" },
-    { name = "ty", specifier = ">=0.0.62,<1.0.0" },
+sdist = { url = "https://files.pythonhosted.org/packages/3c/92/b75101575e62ddefe0115d2b4ac2608fb3e7aee37f8848ecb112b2a07837/deepagents-0.7.8.tar.gz", hash = "sha256:cff48c9a748e85ca86effbbb2470e7c0b32a1518cc98c7b526d4f649a7eeb452", size = 282112, upload-time = "2026-08-20T14:44:26.605Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/f5/53/286525dc4e3f59a343fc74381bb0978b53bde342a6a590de6704a66df257/deepagents-0.7.8-py3-none-any.whl", hash = "sha256:70b64f4881d95a9f01ee9b09697eac3d142fd4a038c4a6528f31ebb4eb8a8ab6", size = 308719, upload-time = "2026-08-20T14:44:25.428Z" },
 ]
 
 [[package]]
@@ -862,7 +829,7 @@ test = [
 
 [package.metadata]
 requires-dist = [
-    { name = "deepagents", editable = "../../deepagents" },
+    { name = "deepagents", specifier = ">=0.7.0,<0.8.0" },
     { name = "microsandbox", specifier = ">=0.6.8,<0.7.0" },
 ]
 

@@ -1,0 +1,63 @@
+name: Release
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build and verify distributions
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
+        with:
+          enable-cache: false
+          python-version: "3.11"
+      - name: Install dependencies
+        run: uv sync --all-groups --frozen
+      - name: Verify release tag
+        run: test "${GITHUB_REF_NAME}" = "v$(uv version --short)"
+      - name: Run required checks
+        run: make lint && make test
+      - name: Build distributions
+        run: uv build
+      - name: Check distribution metadata
+        run: uvx twine check dist/*
+      - name: Test built wheel
+        run: >-
+          uv run --isolated --no-project
+          --with ./dist/langchain_microsandbox-$(uv version --short)-py3-none-any.whl
+          python -c
+          "import langchain_microsandbox; assert langchain_microsandbox.__version__ == '$(uv version --short)'"
+      - name: Upload distributions
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-distributions
+          path: dist/
+          if-no-files-found: error
+
+  publish:
+    name: Publish to PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/langchain-microsandbox
+    permissions:
+      id-token: write
+
+    steps:
+      - name: Download distributions
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6
+        with:
+          name: release-distributions
+          path: dist/
+      - name: Publish distributions
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1

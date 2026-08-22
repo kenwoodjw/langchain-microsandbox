@@ -1,4 +1,4 @@
-.PHONY: format lint type typecheck test tests integration_test integration_tests test_watch benchmark help lint_package
+.PHONY: benchmark build check dist-check format help integration_smoke integration_test integration_tests lint test tests test_watch type typecheck
 
 .DEFAULT_GOAL := help
 
@@ -22,26 +22,34 @@ integration_test: ## Run integration tests
 integration_test integration_tests:
 	uv run --group test pytest -vvv --timeout 30 $(PYTEST_EXTRA) $(TEST_FILE)
 
+integration_smoke: ## Run real microVM command and file-transfer smoke tests
+	uv run --group test pytest -vv --timeout 60 \
+		tests/integration_tests/test_integration.py::TestMicrosandboxSandboxStandard::test_execute_large_stdout_payload \
+		tests/integration_tests/test_integration.py::TestMicrosandboxSandboxStandard::test_aexecute_large_stdout_payload \
+		tests/integration_tests/test_integration.py::TestMicrosandboxSandboxStandard::test_aexecute_timeout_maps_to_exit_124 \
+		tests/integration_tests/test_integration.py::TestMicrosandboxSandboxStandard::test_upload_download_roundtrip
+
 test_watch: ## Run tests in watch mode
 	uv run --group test ptw --now . -- -vv $(TEST_FILE)
 
 benchmark: ## Run benchmark tests
 	uv run --group test pytest ./tests -m benchmark
 
+build: ## Build source and wheel distributions
+	uv build
+
+dist-check: build ## Validate built distribution metadata
+	uvx twine check dist/*
+
+check: lint test dist-check ## Run local lint, unit, and distribution checks
+
 ######################
 # LINTING AND FORMATTING
 ######################
 
-PYTHON_FILES=.
-lint format: PYTHON_FILES=.
-lint_diff format_diff: PYTHON_FILES=$(shell git diff --relative=libs/partners/microsandbox --name-only --diff-filter=d main | grep -E '\.py$$|\.ipynb$$')
-lint_package: ## Lint only the package
-lint_package: PYTHON_FILES=langchain_microsandbox
-
 lint: ## Run linters and type checker
-lint lint_diff lint_package:
-	[ "$(PYTHON_FILES)" = "" ] || uv run --all-groups ruff check $(PYTHON_FILES)
-	[ "$(PYTHON_FILES)" = "" ] || uv run --all-groups ruff format $(PYTHON_FILES) --diff
+	uv run --all-groups ruff check .
+	uv run --all-groups ruff format . --diff
 	$(MAKE) type
 
 type: ## Run type checker
@@ -49,9 +57,8 @@ type typecheck:
 	uv run --all-groups ty check langchain_microsandbox
 
 format: ## Run code formatters
-format format_diff:
-	[ "$(PYTHON_FILES)" = "" ] || uv run --all-groups ruff format $(PYTHON_FILES)
-	[ "$(PYTHON_FILES)" = "" ] || uv run --all-groups ruff check --fix $(PYTHON_FILES)
+	uv run --all-groups ruff format .
+	uv run --all-groups ruff check --fix .
 
 ######################
 # HELP

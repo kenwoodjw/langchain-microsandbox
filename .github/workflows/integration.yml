@@ -1,0 +1,52 @@
+name: Integration
+
+on:
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: Self-hosted runner platform
+        required: true
+        type: choice
+        options:
+          - macos-arm64
+          - linux-kvm
+
+permissions:
+  contents: read
+
+jobs:
+  macos-arm64:
+    if: inputs.platform == 'macos-arm64'
+    runs-on: [self-hosted, macOS, ARM64, microsandbox]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
+        with:
+          enable-cache: false
+          python-version: "3.11"
+      - name: Install dependencies
+        run: uv sync --all-groups --frozen
+      - name: Check virtualization
+        run: uv run msb doctor
+      - name: Run real microVM smoke tests
+        run: make integration_smoke
+
+  linux-kvm:
+    if: inputs.platform == 'linux-kvm'
+    runs-on: [self-hosted, Linux, X64, kvm, microsandbox]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
+        with:
+          enable-cache: false
+          python-version: "3.11"
+      - name: Install dependencies
+        run: uv sync --all-groups --frozen
+      - name: Check KVM access
+        run: test -r /dev/kvm && test -w /dev/kvm && uv run msb doctor
+      - name: Run real microVM smoke tests
+        run: make integration_smoke
