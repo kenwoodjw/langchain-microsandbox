@@ -1,17 +1,21 @@
 from __future__ import annotations
 
 import asyncio
+import shlex
 import threading
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
 import pytest
 from deepagents.backends.protocol import ExecuteResponse
-from microsandbox import ExecTimeoutError, FilesystemError
+from microsandbox import ExecTimeoutError, FilesystemError, FsEntryKind
 
 from langchain_microsandbox import MicrosandboxSandbox
 
 if TYPE_CHECKING:
+    import builtins
+    from collections.abc import Callable
+
     from microsandbox import Sandbox
 
 DEFAULT_TIMEOUT = 30 * 60
@@ -27,13 +31,21 @@ class _Output:
     exit_code: int = 0
 
 
+@dataclass
+class _Entry:
+    path: str
+    kind: FsEntryKind
+
+
 class _Filesystem:
     def __init__(self) -> None:
         self.files: dict[str, bytes] = {}
+        self.entries: dict[str, list[_Entry]] = {}
         self.read_errors: dict[str, Exception] = {}
         self.write_errors: dict[str, Exception] = {}
         self.mkdir_errors: dict[str, Exception] = {}
         self.mkdir_calls: list[str] = []
+        self.remove_calls: list[str] = []
         self.write_calls: list[tuple[str, bytes]] = []
         self.operation_loops: list[asyncio.AbstractEventLoop] = []
 
@@ -56,6 +68,16 @@ class _Filesystem:
             raise error
         return self.files[path]
 
+    async def exists(self, path: str) -> bool:
+        return path in self.files
+
+    async def list(self, path: str) -> builtins.list[_Entry]:
+        return self.entries.get(path, [])
+
+    async def remove(self, path: str) -> None:
+        self.remove_calls.append(path)
+        del self.files[path]
+
 
 class _Sandbox:
     def __init__(
@@ -71,6 +93,7 @@ class _Sandbox:
         self.shell_error: Exception | None = None
         self.shell_loop: asyncio.AbstractEventLoop | None = None
         self.shell_thread: int | None = None
+        self.before_shell: Callable[[str], None] | None = None
         self.fs = _Filesystem()
 
     async def name(self) -> str:
@@ -86,8 +109,16 @@ class _Sandbox:
         self.shell_loop = asyncio.get_running_loop()
         self.shell_thread = threading.get_ident()
         self.shell_calls.append((command, timeout))
+        if self.before_shell is not None:
+            self.before_shell(command)
         if self.shell_error is not None:
             raise self.shell_error
+        if command.startswith("ln -- "):
+            _, _, source, target = shlex.split(command)
+            if target in self.fs.files:
+                return _Output(stderr_text="File exists", exit_code=1)
+            self.fs.files[target] = self.fs.files[source]
+            return _Output()
         return self.output
 
 
@@ -287,17 +318,88 @@ async def test_adownload_files_maps_errors_and_preserves_order() -> None:
     ]
 
 
-async def test_file_operations_surface_unknown_provider_errors() -> None:
+async def test_awrite_refuses_to_overwrite_an_existing_file() -> None:
+    sandbox = _Sandbox()
+    sandbox.fs.files["/existing.txt"] = b"original"
+    backend = await _backend(sandbox)
+
+    result = await backend.awrite("/existing.txt", "replacement")
+
+    assert result.error is not None
+    assert "already exists" in result.error
+    assert sandbox.fs.files["/existing.txt"] == b"original"
+
+
+async def test_awrite_does_not_overwrite_a_file_created_during_publish() -> None:
+    sandbox = _Sandbox()
+
+    def create_competing_file(command: str) -> None:
+        if command.startswith("ln -- "):
+            sandbox.fs.files["/race.txt"] = b"competitor"
+
+    sandbox.before_shell = create_competing_file
+    backend = await _backend(sandbox)
+
+    result = await backend.awrite("/race.txt", "replacement")
+
+    assert result.error is not None
+    assert "already exists" in result.error
+    assert sandbox.fs.files["/race.txt"] == b"competitor"
+    assert set(sandbox.fs.files) == {"/race.txt"}
+
+
+async def test_write_refuses_to_overwrite_an_existing_file() -> None:
+    sandbox = _Sandbox()
+    sandbox.fs.files["/existing.txt"] = b"original"
+    backend = await _backend(sandbox)
+
+    result = backend.write("/existing.txt", "replacement")
+
+    assert result.error is not None
+    assert sandbox.fs.files["/existing.txt"] == b"original"
+
+
+async def test_aglob_returns_relative_files_and_directories() -> None:
+    sandbox = _Sandbox()
+    sandbox.fs.entries["/workspace"] = [
+        _Entry(path="/workspace/subdir", kind=FsEntryKind.DIRECTORY),
+        _Entry(path="/workspace/file.txt", kind=FsEntryKind.FILE),
+    ]
+    sandbox.fs.entries["/workspace/subdir"] = [
+        _Entry(path="/workspace/subdir/nested.txt", kind=FsEntryKind.FILE),
+    ]
+    backend = await _backend(sandbox)
+
+    result = await backend.aglob("*", path="/workspace")
+
+    assert result.error is None
+    assert result.matches == [
+        {"path": "file.txt", "is_dir": False},
+        {"path": "subdir", "is_dir": True},
+        {"path": "subdir/nested.txt", "is_dir": False},
+    ]
+
+
+async def test_file_operations_propagate_unknown_provider_errors() -> None:
     sandbox = _Sandbox()
     sandbox.fs.write_errors["/write.txt"] = FilesystemError("transport closed")
     sandbox.fs.read_errors["/read.txt"] = FilesystemError("transport closed")
     backend = await _backend(sandbox)
 
-    upload = await backend.aupload_files([("/write.txt", b"data")])
-    download = await backend.adownload_files(["/read.txt"])
+    with pytest.raises(FilesystemError, match="transport closed"):
+        await backend.aupload_files([("/write.txt", b"data")])
 
-    assert upload[0].error == "transport closed"
-    assert download[0].error == "transport closed"
+    with pytest.raises(FilesystemError, match="transport closed"):
+        await backend.adownload_files(["/read.txt"])
+
+
+async def test_unknown_errors_are_not_classified_by_message_alone() -> None:
+    sandbox = _Sandbox()
+    sandbox.fs.read_errors["/read.txt"] = RuntimeError("endpoint not found")
+    backend = await _backend(sandbox)
+
+    with pytest.raises(RuntimeError, match="endpoint not found"):
+        await backend.adownload_files(["/read.txt"])
 
 
 async def test_sync_file_operations_work_inside_running_event_loop() -> None:

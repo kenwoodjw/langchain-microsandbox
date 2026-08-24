@@ -3,9 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import shlex
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import suppress
+from fnmatch import fnmatchcase
+from functools import cache
 from pathlib import PurePosixPath
 from typing import TYPE_CHECKING, TypeVar, cast
+from uuid import uuid4
 
 from deepagents.backends.protocol import (
     FILE_NOT_FOUND,
@@ -14,20 +19,29 @@ from deepagents.backends.protocol import (
     PERMISSION_DENIED,
     ExecuteResponse,
     FileDownloadResponse,
+    FileInfo,
     FileOperationError,
     FileUploadResponse,
+    GlobResult,
+    WriteResult,
 )
 from deepagents.backends.sandbox import BaseSandbox
-from microsandbox import ExecTimeoutError, PathNotFoundError
+from microsandbox import (
+    ExecTimeoutError,
+    FilesystemError,
+    FsEntryKind,
+    PathNotFoundError,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Coroutine
     from concurrent.futures import Future
 
-    from microsandbox import ExecOutput, Sandbox
+    from microsandbox import ExecOutput, FsEntry, Sandbox
 
 _ResultT = TypeVar("_ResultT")
 _TIMEOUT_EXIT_CODE = 124
+_MAX_GLOB_ENTRIES = 10_000
 
 
 class MicrosandboxSandbox(BaseSandbox):
@@ -151,6 +165,128 @@ class MicrosandboxSandbox(BaseSandbox):
             )
         return _map_execute_output(output)
 
+    def write(self, file_path: str, content: str) -> WriteResult:
+        """Create a UTF-8 file without overwriting an existing path.
+
+        Args:
+            file_path: Absolute path for the file.
+            content: UTF-8 text content to write.
+
+        Returns:
+            The created path, or an error if the path already exists or cannot be
+            written.
+        """
+        return _run_sync(lambda: self.awrite(file_path, content))
+
+    async def awrite(self, file_path: str, content: str) -> WriteResult:
+        """Create a UTF-8 file through Microsandbox's async filesystem API.
+
+        Args:
+            file_path: Absolute path for the file.
+            content: UTF-8 text content to write.
+
+        Returns:
+            The created path, or an error if the path already exists or cannot be
+            written.
+        """
+        if not file_path.startswith("/"):
+            return WriteResult(error=f"Invalid path: '{file_path}'")
+
+        try:
+            error = await self._atomic_write(file_path, content.encode("utf-8"))
+        except Exception as exc:
+            operation_error = _map_file_error(exc)
+            if operation_error is None:
+                raise
+            error = operation_error
+        if error is not None:
+            return WriteResult(error=f"Failed to write file '{file_path}': {error}")
+        return WriteResult(path=file_path)
+
+    async def _atomic_write(self, path: str, content: bytes) -> str | None:
+        parent = str(PurePosixPath(path).parent)
+        if parent != "/":
+            await self._sandbox.fs.mkdir(parent)
+        temp = str(PurePosixPath(parent) / f".microsandbox-{uuid4().hex}.tmp")
+        await self._sandbox.fs.write(temp, content)
+        command = f"ln -- {shlex.quote(temp)} {shlex.quote(path)}"
+        try:
+            output = await self._sandbox.shell(
+                command,
+                timeout=float(self._default_timeout),
+            )
+        finally:
+            with suppress(PathNotFoundError):
+                await self._sandbox.fs.remove(temp)
+        if output.exit_code == 0:
+            return None
+        detail = output.stderr_text.strip() or output.stdout_text.strip()
+        if "file exists" in detail.lower():
+            return "already exists"
+        return detail or f"atomic publish exited with code {output.exit_code}"
+
+    def glob(self, pattern: str, path: str | None = None) -> GlobResult:
+        """Return relative file and directory matches for a glob pattern.
+
+        Args:
+            pattern: Glob pattern, relative to `path`.
+            path: Absolute directory to search. Defaults to the sandbox root.
+
+        Returns:
+            Matching paths relative to the search directory.
+        """
+        return _run_sync(lambda: self.aglob(pattern, path=path))
+
+    async def aglob(self, pattern: str, path: str | None = None) -> GlobResult:
+        """Search files and directories through Microsandbox's filesystem API.
+
+        Args:
+            pattern: Glob pattern, relative to `path`.
+            path: Absolute directory to search. Defaults to the sandbox root.
+
+        Returns:
+            Matching paths relative to the search directory.
+        """
+        search_path = path or "/"
+        if not search_path.startswith("/"):
+            return GlobResult(error=f"Path '{search_path}': {INVALID_PATH}")
+        if ".." in pattern.replace("\\", "/").split("/"):
+            return GlobResult(error=f"Path '{search_path}': invalid_pattern")
+
+        try:
+            entries, truncated = await self._list_entries(search_path)
+        except Exception as exc:
+            error = _map_file_error(exc)
+            if error is None:
+                raise
+            return GlobResult(error=f"Path '{search_path}': {error}")
+
+        matches: list[FileInfo] = []
+        root = PurePosixPath(search_path)
+        for entry in entries:
+            try:
+                relative = PurePosixPath(entry.path).relative_to(root).as_posix()
+            except ValueError:
+                continue
+            is_dir = entry.kind == FsEntryKind.DIRECTORY
+            if _glob_matches(relative, pattern, is_dir=is_dir):
+                matches.append({"path": relative, "is_dir": is_dir})
+        matches.sort(key=lambda item: item["path"])
+        return GlobResult(matches=matches, truncated=truncated)
+
+    async def _list_entries(self, root: str) -> tuple[list[FsEntry], bool]:
+        pending = [root]
+        entries: list[FsEntry] = []
+        while pending:
+            current = pending.pop()
+            for entry in await self._sandbox.fs.list(current):
+                entries.append(entry)
+                if len(entries) >= _MAX_GLOB_ENTRIES:
+                    return entries, True
+                if entry.kind == FsEntryKind.DIRECTORY:
+                    pending.append(entry.path)
+        return entries, False
+
     def upload_files(
         self,
         files: list[tuple[str, bytes]],
@@ -188,8 +324,11 @@ class MicrosandboxSandbox(BaseSandbox):
             if parent != "/":
                 await self._sandbox.fs.mkdir(parent)
             await self._sandbox.fs.write(path, content)
-        except Exception as exc:  # noqa: BLE001  # Provider errors vary by operation
-            return FileUploadResponse(path=path, error=_map_file_error(exc))
+        except Exception as exc:
+            error = _map_file_error(exc)
+            if error is None:
+                raise
+            return FileUploadResponse(path=path, error=error)
         return FileUploadResponse(path=path, error=None)
 
     def download_files(self, paths: list[str]) -> list[FileDownloadResponse]:
@@ -223,11 +362,14 @@ class MicrosandboxSandbox(BaseSandbox):
 
         try:
             content = await self._sandbox.fs.read(path)
-        except Exception as exc:  # noqa: BLE001  # Provider errors vary by operation
+        except Exception as exc:
+            error = _map_file_error(exc)
+            if error is None:
+                raise
             return FileDownloadResponse(
                 path=path,
                 content=None,
-                error=_map_file_error(exc),
+                error=error,
             )
         return FileDownloadResponse(path=path, content=content, error=None)
 
@@ -245,14 +387,17 @@ def _map_execute_output(output: ExecOutput) -> ExecuteResponse:
     )
 
 
-def _map_file_error(exc: Exception) -> FileOperationError | str:
-    """Normalize known filesystem failures and preserve unknown provider errors."""
+def _map_file_error(exc: Exception) -> FileOperationError | None:
+    """Normalize filesystem failures that callers can plausibly fix or retry."""
     if isinstance(exc, PermissionError):
         return PERMISSION_DENIED
     if isinstance(exc, IsADirectoryError):
         return IS_DIRECTORY
     if isinstance(exc, (FileNotFoundError, PathNotFoundError)):
         return FILE_NOT_FOUND
+
+    if not isinstance(exc, FilesystemError):
+        return None
 
     message = str(exc)
     normalized = message.lower()
@@ -265,7 +410,50 @@ def _map_file_error(exc: Exception) -> FileOperationError | str:
     for needles, error in substring_errors:
         if any(needle in normalized for needle in needles):
             return error
-    return message or type(exc).__name__
+    return None
+
+
+def _glob_matches(path: str, pattern: str, *, is_dir: bool) -> bool:
+    """Match a relative POSIX path using the sandbox glob contract."""
+    normalized = pattern.lstrip("/")
+    if normalized.endswith("/") and not is_dir:
+        return False
+    pattern_parts = tuple(part for part in normalized.split("/") if part)
+    path_parts = tuple(part for part in path.split("/") if part)
+    if "/" not in normalized:
+        return bool(path_parts) and _segment_matches(path_parts[-1], normalized)
+    return _parts_match(path_parts, pattern_parts)
+
+
+def _segment_matches(name: str, pattern: str) -> bool:
+    if name.startswith(".") and not pattern.startswith("."):
+        return False
+    if pattern.startswith("[^"):
+        pattern = "[!" + pattern[2:]
+    return fnmatchcase(name, pattern)
+
+
+def _parts_match(path: tuple[str, ...], pattern: tuple[str, ...]) -> bool:
+    @cache
+    def match(path_index: int, pattern_index: int) -> bool:
+        if pattern_index == len(pattern):
+            return path_index == len(path)
+        segment = pattern[pattern_index]
+        if segment == "**":
+            if match(path_index, pattern_index + 1):
+                return True
+            return (
+                path_index < len(path)
+                and not path[path_index].startswith(".")
+                and match(path_index + 1, pattern_index)
+            )
+        return (
+            path_index < len(path)
+            and _segment_matches(path[path_index], segment)
+            and match(path_index + 1, pattern_index + 1)
+        )
+
+    return match(0, 0)
 
 
 def _run_sync(factory: Callable[[], Coroutine[object, object, _ResultT]]) -> _ResultT:

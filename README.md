@@ -89,8 +89,11 @@ virtualization:
 
 ```bash
 uv run msb doctor
-make integration_smoke
+make integration_test
 ```
+
+Use `make integration_smoke` for a faster command, timeout, and file-transfer
+subset while iterating locally.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the complete development and release
 workflow.

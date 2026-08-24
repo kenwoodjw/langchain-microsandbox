@@ -30,8 +30,8 @@ jobs:
         run: uv sync --all-groups --frozen
       - name: Check virtualization
         run: uv run msb doctor
-      - name: Run real microVM smoke tests
-        run: make integration_smoke
+      - name: Run sandbox standard tests
+        run: make integration_test
 
   linux-kvm:
     if: inputs.platform == 'linux-kvm'
@@ -48,5 +48,5 @@ jobs:
         run: uv sync --all-groups --frozen
       - name: Check KVM access
         run: test -r /dev/kvm && test -w /dev/kvm && uv run msb doctor
-      - name: Run real microVM smoke tests
-        run: make integration_smoke
+      - name: Run sandbox standard tests
+        run: make integration_test
