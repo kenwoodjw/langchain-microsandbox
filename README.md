@@ -2,6 +2,7 @@
 
 [![CI](https://github.com/kenwoodjw/langchain-microsandbox/actions/workflows/ci.yml/badge.svg)](https://github.com/kenwoodjw/langchain-microsandbox/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/langchain-microsandbox.svg)](https://pypi.org/project/langchain-microsandbox/)
+[![Downloads](https://static.pepy.tech/badge/langchain-microsandbox/month)](https://pepy.tech/projects/langchain-microsandbox)
 
 Community-maintained Microsandbox integration for Deep Agents. It adapts an
 existing [`microsandbox.Sandbox`](https://docs.microsandbox.dev/) to the current
